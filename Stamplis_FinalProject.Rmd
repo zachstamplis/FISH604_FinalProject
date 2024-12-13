@@ -1,12 +1,12 @@
 ---
 output: html_document
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 # Load Packages
 ```{r, results = 'hide', warning = F, message = F}
 # Install packages not yet installed
-packages <- c("dplyr", "pls", "hyperSpec", "prospectr", "mdatools", "ggplot2", "viridis", "mgcv", "caret", "MuMIn", "gglm", "gratia", "tidyr", "ggpubr")
+packages <- c("dplyr", "pls", "hyperSpec", "prospectr", "mdatools", "ggplot2", "viridis", "mgcv", "caret", "MuMIn", "gglm", "gratia", "tidyr", "ggpubr", "corrplot")
 installed_packages <- packages %in% rownames(installed.packages())
 if (any(installed_packages == FALSE)) {
   utils::install.packages(pkgs = packages[!installed_packages])
@@ -97,7 +97,11 @@ proc_spec <- ggplot(
 
 ggarrange(raw_spec, proc_spec, ncol = 1, common.legend = T)
 rm(raw_spec, proc_spec, scan_avg_long, scan_avg_raw_long, scan_avg_raw)
+
+#### Figure 3 - Correlation plot of wavenumbers 5264 - 4016 cm-1 
+corrplot(cor(scan_avg[, 300:456]), tl.pos='n', cl.cex = 1.8)
 ```
+
 ```{r,fig.width=10,fig.height=5}
 #### Figure 3 - PCA and outliers removed ###
 # Plot PCA, length by color, outliers removed triangles
@@ -178,9 +182,9 @@ for (i in 1:10) {
   calibrate <- cal[[i]]
   testing <- test[[i]]
   mod <- lm(data = calibrate, read_age ~ PC1 + PC3 + PC4)
-  RMSE.age$lm.cal[i] <- RMSE(pred = mod$fitted.values, obs = calibrate[, 13])
+  RMSE.age$lm.cal[i] <- RMSE(pred = mod$fitted.values, obs = calibrate[, 15])
   preds <- predict(mod, newdata = testing)
-  RMSE.age$lm.test[i] <- RMSE(pred = preds, obs = testing[, 13])
+  RMSE.age$lm.test[i] <- RMSE(pred = preds, obs = testing[, 15])
   r2.age$lm.cal[i] <- summary(mod)$r.squared
   RSS <- sum((testing$read_age - preds)^2)
   TSS <- sum((testing$read_age - mean(testing$read_age))^2)
@@ -206,7 +210,7 @@ for (i in 1:10) {
   # Extract AIC, AICc, RMSE (cal & test) & r2 (cal & test)
   RMSE.age$GAM.cal[i] <- caret::RMSE(pred = mod$fitted.values, obs = calibrate[, 13])
   preds <- predict(mod, newdata = testing)
-  RMSE.age$GAM.test[i] <- caret::RMSE(pred = preds, obs = testing[, 13])
+  RMSE.age$GAM.test[i] <- caret::RMSE(pred = preds, obs = testing[, 15])
   r2.age$gam.cal[i] <- summary(mod)$r.sq
   RSS <- sum((testing$read_age - preds)^2)
   TSS <- sum((testing$read_age - mean(testing$read_age))^2)
@@ -312,4 +316,19 @@ plot5 <- ggplot() +
   ggtitle("GAM")
 
 plot4 + plot5
+```
+# Appendix
+```{r}
+# Using test/cal split # 5 for model performance appendix, but all 10 are available if interested
+
+# ggplot version of lm diagnostics
+gglm(lm.mods[[5]], theme = theme_bw(), theme(plot.title = element_text(size = 18), axis.title = element_text(size = 16),axis.text = element_text(size = 14)) )
+     
+# GAM diagnostics
+appraise(GAM.mods[[5]]) & theme_bw() & 
+  theme(plot.title = element_text(size = 15), axis.title = element_text(size = 14),axis.text = element_text(size = 12))
+
+# GAM partial effects
+draw(GAM.mods[[5]],residuals = T) & theme_bw() & 
+  theme(plot.title = element_text(size = 15), axis.title = element_text(size = 14),axis.text = element_text(size = 12))
 ```
