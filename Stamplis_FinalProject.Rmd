@@ -1,0 +1,315 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+# Load Packages
+```{r, results = 'hide', warning = F, message = F}
+# Install packages not yet installed
+packages <- c("dplyr", "pls", "hyperSpec", "prospectr", "mdatools", "ggplot2", "viridis", "mgcv", "caret", "MuMIn", "gglm", "gratia", "tidyr", "ggpubr")
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  utils::install.packages(pkgs = packages[!installed_packages])
+}
+invisible(lapply(packages, library, character.only = TRUE)) # load all packages in list
+# install packages not on CRAN
+if (!require("remotes")) install.packages("remotes")
+
+rm(installed_packages) # remove objects from environment
+rm(packages)
+```
+# Load Data Frames, create filtered dataframe
+```{r}
+# all 3 FT-NIRS scans, no preprocessing or wavenumber filters
+dfmeta_LPW <- readRDS("LPW_dfmeta.RDS")
+
+# average of scans 2 & 3, no preprocessing
+scan_2 <- dfmeta_LPW %>% dplyr::filter(run_number == 2)
+scan_3 <- dfmeta_LPW %>% dplyr::filter(run_number == 3)
+scan_avg_raw <- bind_cols(NULL, scan_2[, 1:20])
+scan_avg_raw <- bind_cols(scan_2[, 1:20], (scan_2[, 21:ncol(scan_2)] + scan_3[, 21:ncol(scan_3)]) / 2) # average for all absorbance measurements
+scan_avg_raw <- scan_avg_raw[complete.cases(scan_avg_raw$read_age), ]
+rm(scan_2, scan_3)
+
+# preprocess and remove wavenumbers > 7500
+scan_avg <- cbind(scan_avg_raw[, c(1:20)], savitzkyGolay(scan_avg_raw[, 21:length(scan_avg_raw)], m = 1, p = 3, w = 17))
+scan_avg <- scan_avg[, -c(21:517)]
+
+# long_format for plotting
+scan_avg_raw_long <- pivot_longer(scan_avg_raw, cols = `11536`:`3952`, names_to = "name", values_to = "value")
+scan_avg_raw_long$name <- as.numeric(scan_avg_raw_long$name)
+
+scan_avg_long <- pivot_longer(scan_avg, cols = `7496`:`4016`, names_to = "name", values_to = "value")
+scan_avg_long$name <- as.numeric(scan_avg_long$name)
+```
+# Figures 1-3: Exploratory Analysis
+```{r}
+### Figure 1 - Sample date vs length
+# plot of specimens used vs sample date to demonstrate fish got larger over time
+ggplot(scan_avg %>% dplyr::filter(read_age != 175, read_age != 135, specimen != 65, read_age != 147, read_age != 181, read_age != 161, read_age != 188),
+       aes(x = sample_date, y = length)) +
+  geom_point(size = 3) + 
+  xlab("Sample Date") + 
+  ylab("Fork length (mm)") + 
+  theme_bw() + 
+  geom_smooth(method = "lm", col = "black") + 
+  theme(
+    axis.title = element_text(size = 20),
+    axis.text = element_text(size = 15))
+```
+```{r,fig.width=10,fig.height=7}
+### Figure 2 - raw vs preprocessed spectra, outliers removed
+raw_spec <- ggplot(
+  scan_avg_raw_long %>% dplyr::filter(read_age != 175, read_age != 135, specimen != 65, read_age != 147, read_age != 181, read_age != 161, read_age != 188),
+  aes(x = name, y = value, group = specimen, color = read_age)
+) +
+  geom_path() +
+  scale_x_reverse() +
+  scale_color_viridis() +
+  labs(
+    color = "Age (days)",
+    y = "Raw absorbance", x = ""
+  ) +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 11),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 17)
+  ) +
+  geom_vline(xintercept = 7500, col = "red", linewidth = 2, linetype = "dashed")
+
+proc_spec <- ggplot(
+  scan_avg_long %>%
+    dplyr::filter(read_age != 175, read_age != 135, specimen != 65, read_age != 147, read_age != 181, read_age != 161, read_age != 188),
+  aes(x = name, y = value, group = specimen, color = read_age)
+) +
+  geom_path() +
+  scale_x_reverse() +
+  scale_color_viridis() +
+  labs(color = "Age (days)") +
+  labs(y = "Preprocessed absorbance", x = expression(paste("Wavenumber ", cm^-1))) +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 11),
+    legend.text = element_text(size = 10, vjust = .2),
+    legend.title = element_text(size = 15, vjust = 1)
+  )
+
+ggarrange(raw_spec, proc_spec, ncol = 1, common.legend = T)
+rm(raw_spec, proc_spec, scan_avg_long, scan_avg_raw_long, scan_avg_raw)
+```
+```{r,fig.width=10,fig.height=5}
+#### Figure 3 - PCA and outliers removed ###
+# Plot PCA, length by color, outliers removed triangles
+pcs <- prcomp(scan_avg[, 21:ncol(scan_avg)])
+pcs <- pcs$x[, 1:2]
+scan_avg <- cbind(pcs, scan_avg)
+rm(pcs)
+
+# specimens removed from dataset
+specimens <- scan_avg %>%
+  dplyr::filter(read_age == 175 | read_age == 135 | specimen == 65 | read_age == 147 | read_age == 181 | read_age == 161 | read_age == 188) %>%
+  select(specimen)
+
+ggplot() +
+  geom_point(data = scan_avg[!scan_avg$specimen %in% specimens$specimen, ], aes(x = PC1, y = PC2, color = read_age), size = 3.5) +
+  scale_color_viridis() +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 25),
+    axis.text = element_text(size = 20),
+    legend.text = element_text(size = 15, color = "black"),
+    legend.title = element_text(size = 18),
+    legend.position.inside = c(0.9, 0.8)
+  ) +
+  labs(color = "Age (days)") +
+  geom_point(data = scan_avg[scan_avg$specimen %in% specimens$specimen, ], aes(x = PC1, y = PC2, color = read_age), shape = 17, size = 4)
+rm(specimens)
+```
+# Modeling
+```{r}
+# remove outliers from dataframe
+scan_avg_filter <- scan_avg %>%
+  dplyr::filter(read_age != 175, read_age != 135, specimen != 65, read_age != 147, read_age != 181, read_age != 161, read_age != 188)
+scan_avg_filter <- scan_avg_filter[, -c(1:2)] # remove PC columns
+
+# 10 fold CV split - create folds
+set.seed(6)
+splits <- caret::createFolds(scan_avg_filter$read_age, k = 10, list = TRUE, returnTrain = FALSE)
+
+# extract PC's for each calibration set, create test sets with ages and spectra
+cal <- list()
+test <- list()
+for (i in 1:10) {
+  # calibration set and PC's
+  pc.mod <- preProcess(scan_avg_filter[-splits[[i]], -c(1:20)], method = "pca", thresh = 0.95, pcaComp = 4)
+  pc.cal <- predict(pc.mod, scan_avg_filter[-splits[[i]], -c(1:20)])
+  pc.cal <- cbind(pc.cal, scan_avg_filter[-splits[[i]], ])
+  cal[[i]] <- pc.cal
+  # test sets
+  pc.test <- predict(pc.mod, scan_avg_filter[splits[[i]], -c(1:20)])
+  pc.test <- cbind(pc.test, scan_avg_filter[splits[[i]], ])
+  test[[i]] <- pc.test
+}
+rm(pc.cal, pc.test, pc.mod, scan_avg)
+
+# store metrics from each fold and each model type
+RMSE.age <- list()
+r2.age <- list()
+AIC.age <- list()
+AICc.age <- list()
+```
+```{r,results = 'hide', echo=F}
+# determine which PC's to include via step & AIC selection
+mod.sel <- list()
+for (i in 1:10) {
+  pctest <- cal[[i]]
+  temp <- step(lm(data = pctest[-splits[[i]], ], read_age ~ PC1 + PC2 + PC3 + PC4))
+  mod.sel[[i]] <- rownames(summary(temp)$coef)
+}
+```
+```{r}
+table(unlist(mod.sel))
+# PC 2 may be uninformative, will leave out of lm(). PC4 only used in half, also possibly not as informative
+
+# lm() with 10-fold CV
+lm.mods <- list()
+for (i in 1:10) {
+  calibrate <- cal[[i]]
+  testing <- test[[i]]
+  mod <- lm(data = calibrate, read_age ~ PC1 + PC3 + PC4)
+  RMSE.age$lm.cal[i] <- RMSE(pred = mod$fitted.values, obs = calibrate[, 13])
+  preds <- predict(mod, newdata = testing)
+  RMSE.age$lm.test[i] <- RMSE(pred = preds, obs = testing[, 13])
+  r2.age$lm.cal[i] <- summary(mod)$r.squared
+  RSS <- sum((testing$read_age - preds)^2)
+  TSS <- sum((testing$read_age - mean(testing$read_age))^2)
+  r2.age$lm.test[i] <- 1 - (RSS / TSS)
+  AIC.age$lm[i] <- AIC(mod)
+  AICc.age$lm[i] <- AICc(mod)
+  lm.mods[[i]] <- mod
+}
+
+RMSE.age$lm.cal <- mean(RMSE.age$lm.cal)
+RMSE.age$lm.test <- mean(RMSE.age$lm.test)
+r2.age$lm.cal <- mean(r2.age$lm.cal)
+r2.age$lm.test <- mean(r2.age$lm.test)
+
+
+# GAM with 10 fold CV, select = T allows PCs to be penalized and effectively removed from model if appropriate.
+
+GAM.mods <- list()
+for (i in 1:10) {
+  calibrate <- cal[[i]]
+  testing <- test[[i]]
+  mod <- gam(data = calibrate, read_age ~ s(PC1) + s(PC2) + s(PC3) + s(PC4), method = "REML")
+  # Extract AIC, AICc, RMSE (cal & test) & r2 (cal & test)
+  RMSE.age$GAM.cal[i] <- caret::RMSE(pred = mod$fitted.values, obs = calibrate[, 13])
+  preds <- predict(mod, newdata = testing)
+  RMSE.age$GAM.test[i] <- caret::RMSE(pred = preds, obs = testing[, 13])
+  r2.age$gam.cal[i] <- summary(mod)$r.sq
+  RSS <- sum((testing$read_age - preds)^2)
+  TSS <- sum((testing$read_age - mean(testing$read_age))^2)
+  r2.age$gam.test[i] <- 1 - (RSS / TSS)
+  AIC.age$gam[i] <- AIC(mod)
+  AICc.age$gam[i] <- AICc(mod)
+  GAM.mods[[i]] <- mod
+}
+
+r2.age$gam.cal <- mean(r2.age$gam.cal)
+r2.age$gam.test <- mean(r2.age$gam.test)
+RMSE.age$GAM.cal <- mean(RMSE.age$GAM.cal)
+RMSE.age$GAM.test <- mean(RMSE.age$GAM.test)
+
+mod.summary <- data.frame(
+  model = c("lm_cal", "lm_test", "gam_cal", "gam_test"),
+  r2 = 1:4,
+  RMSE = 1:4
+)
+mod.summary$r2 <- unlist(r2.age)
+mod.summary$RMSE <- unlist(RMSE.age)
+
+AIC.summary <- data.frame(
+  model = c(rep("lm", 10), rep("gam", 10)),
+  AIC = 1:20,
+  AICc = 1:20
+)
+# AIC.age <- AIC.age[-3]
+AIC.summary$AIC <- unlist(AIC.age)
+AIC.summary$AICc <- unlist(AICc.age)
+
+
+# LM
+mean(AIC.summary[1:10, 2]) # AIC
+mean(AIC.summary[1:10, 3]) # AICc
+
+# GAM
+mean(AIC.summary[11:20, 2]) # AIC
+mean(AIC.summary[11:20, 3]) # AICc
+
+rm(r2.age, AIC.age, AICc.age, calibrate, mod, mod.sel, pctest, i, preds, RSS, TSS, testing, temp)
+```
+# Figure 4 - Plotting model performance
+```{r,fig.width=10,fig.height=5}
+# Figure 4 - model performance plots
+actual <- list()
+pred_lm <- list()
+pred_gam <- list()
+
+# create dataframe with predictions vs actual age
+for (i in 1:10) {
+  actual[[i]] <- test[[i]]$read_age
+  pred_lm[[i]] <- predict(lm.mods[[i]], test[[i]])
+  pred_gam[[i]] <- predict(GAM.mods[[i]], test[[i]])
+}
+predictions <- data.frame(
+  actual = rep(0, 54),
+  pred_lm = rep(0, 54),
+  pred_gam = rep(0, 54)
+)
+predictions$actual <- unlist(actual)
+predictions$pred_lm <- unlist(pred_lm)
+predictions$pred_gam <- unlist(pred_gam)
+rm(actual, pred_lm, pred_gam)
+
+# LM model performance
+RMSE.age$lm.test <- mean(RMSE.age$lm.test)
+r2lmlab <- paste("r2 =", round(mod.summary[2, 2], 3))
+rmselmlab <- paste("RMSE = ", round(RMSE.age$lm.test, 3))
+
+plot4 <- ggplot() +
+  theme_bw() +
+  geom_point(data = predictions, aes(x = actual, y = pred_lm), size = 3) +
+  geom_abline(slope = 1, linewidth = 1.25, col = "red", linetype = "longdash") +
+  xlab("Age (days)") +
+  ylab("Predicted age (days)") +
+  geom_text(aes(x = 184, y = 130), size = 4, label = r2lmlab) +
+  geom_text(aes(x = 180, y = 124), size = 4, label = rmselmlab) +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 20)
+  ) +
+  ggtitle("MLR")
+
+# GAM model performance
+r2gamlab <- paste("r2 =", round(mod.summary[4, 2], 3))
+rmsegamlab <- paste("RMSE = ", round(RMSE.age$GAM.test, 3))
+
+plot5 <- ggplot() +
+  theme_bw() +
+  geom_point(data = predictions, aes(x = actual, y = pred_gam), size = 3) +
+  geom_abline(slope = 1, linewidth = 1.25, col = "red", linetype = "longdash") +
+  xlab("Age (days)") +
+  ylab("Predicted age (days)") +
+  geom_text(aes(x = 184, y = 125), size = 4, label = r2gamlab) +
+  geom_text(aes(x = 180, y = 119), size = 4, label = rmsegamlab) +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 20)
+  ) +
+  ggtitle("GAM")
+
+plot4 + plot5
+```
